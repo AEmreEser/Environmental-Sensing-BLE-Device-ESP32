@@ -1,6 +1,9 @@
 {
     "cmake.configureOnOpen": true,
     "files.associations": {
-        "gpio.h": "c"
+        "gpio.h": "c",
+        "esp_log.h": "c",
+        "freertos.h": "c",
+        "task.h": "c"
     }
 }

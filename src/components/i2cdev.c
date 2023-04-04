@@ -15,6 +15,7 @@
 #include <esp_log.h>
 #include "i2cdev.h"
 
+
 static const char *TAG = "i2cdev";
 
 typedef struct {
