@@ -44,7 +44,7 @@ void app_main() {
 
         vTaskDelay(2400 / portTICK_PERIOD_MS); // 240 ms delay // need twice of high res measurement update period as the measurements are taken twice
 
-        ERROR_CHECK(light_strength = bh1750_read(), error, TAGBH);
+        ERROR_CHECK(light_strength = bh1750_read(), error, TAGBH); // ISSUE: FOR SOME REASON WE ALWAYS GET AN ERROR = 1 WITH THE LUX MEASUREMENT
         ESP_LOGI(TAGBH, "light strength at instance: %f", light_strength);
 
         vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay
@@ -54,11 +54,16 @@ void app_main() {
 }
 
 /**
- * TODO:
+ * TODO: fixes
+ * @lux measurement always returns 1 -> independent of actual measurement failure
+ * 
+ * TODO: features
  * @ --DONE-- light sensor stuff 
  * @ read from sensor function 
  * @ moving median function
  * @ lifo queue for sensor values -- decide on queue item type carefully
  * @ BLE functionality
  * 
+ * Extra Features:
+ * @ -- unit conversion
 */
