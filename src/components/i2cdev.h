@@ -237,7 +237,7 @@ esp_err_t i2c_dev_write_reg(const i2c_dev_t *dev, uint8_t reg,
         esp_err_t ___ = X; \
         if (___ != ESP_OK) { \
             I2C_DEV_GIVE_MUTEX(dev); \
-            ESP_LOGE(TAG, msg, ## __VA_ARGS__); \
+            ESP_LOGE(BHTAG, msg, ## __VA_ARGS__); \
             return ___; \
         } \
     } while (0)

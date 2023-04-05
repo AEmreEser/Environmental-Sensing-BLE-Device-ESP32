@@ -15,7 +15,9 @@
 #ifndef BH1750_H_
 #define BH1750_H_
 
-#include "bh1750.h"
+#include "bh1750.h" // is this not bad practice??
+
+/** @list  commands list: */
 #define BH1750_ADDRESS1	0x23
 #define BH1750_ADDRESS2	0x5C
 #define BH1750_POWER_DOWN 0x00
@@ -31,5 +33,8 @@
 void bh1750_init(void);
 float bh1750_read(void);
 void bh1750_deinit(void);
+int bh1750_I2C_write(uint8_t dev_addr, uint8_t reg_addr, uint8_t *reg_data, uint8_t cnt);
+int bh1750_I2C_read(uint8_t dev_addr, uint8_t reg_addr, uint8_t *reg_data, uint8_t cnt);
+
 
 #endif /* BH1750_H_ */
