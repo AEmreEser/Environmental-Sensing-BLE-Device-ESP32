@@ -1,174 +1,208 @@
-/*
- * Copyright (c) 2017 Andrej Krutak <dev@andree.sk>
- * Copyright (c) 2018 Ruslan V. Uss <unclerus@gmail.com>
+/* Copyright (c) 2017 pcbreflux. All Rights Reserved.
  *
- * Redistribution and use in source and binary forms, with or without
- * modification, are permitted provided that the following conditions are met:
+ * This program is free software: you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation, version 3.
  *
- * 1. Redistributions of source code must retain the above copyright notice,
- *    this list of conditions and the following disclaimer.
- * 2. Redistributions in binary form must reproduce the above copyright notice,
- *    this list of conditions and the following disclaimer in the documentation
- *    and/or other materials provided with the distribution.
- * 3. Neither the name of the copyright holder nor the names of itscontributors
- *    may be used to endorse or promote products derived from this software without
- *    specific prior written permission.
+ * This program is distributed in the hope that it will be useful, but
+ * WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the GNU
+ * General Public License for more details.
  *
- * THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
- * AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
- * IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
- * DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
- * FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
- * DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
- * SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
- * CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
- * OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
- * OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
- */
-
-// TAKEN FROM: https://github.com/UncleRus/esp-idf-lib/tree/master/components/bh1750
-
-
-/**
- * @file bh1750.c
- *
- * @ingroup bh1750 ESP-IDF driver for BH1750 light sensor
- *
- * ESP-IDF driver for BH1750 light sensor
- *
- * Datasheet: ROHM Semiconductor bh1750fvi-e.pdf
- *
- * Ported from esp-open-rtos
- *
- * Copyright (c) 2017 Andrej Krutak <dev@andree.sk>\n
- * Copyright (c) 2018 Ruslan V. Uss <unclerus@gmail.com>
- *
- * BSD Licensed as described in the file LICENSE
+ * You should have received a copy of the GNU General Public License
+ * along with this program. If not, see <http://www.gnu.org/licenses/>. *
  */
 #include <stdio.h>
-#include <freertos/FreeRTOS.h>
-#include <esp_log.h>
-#include "esp_idf_lib_helpers.h"
+#include <string.h>
+
+#include "sdkconfig.h"
+#include "esp_log.h"
+#include "driver/i2c.h"
+
+#include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+
 #include "bh1750.h"
-
-
-#define OPCODE_HIGH  0x0
-#define OPCODE_HIGH2 0x1
-#define OPCODE_LOW   0x3
-
-#define OPCODE_CONT 0x10
-#define OPCODE_OT   0x20
-
-#define OPCODE_POWER_DOWN 0x00
-#define OPCODE_POWER_ON   0x01
-#define OPCODE_MT_HI      0x40
-#define OPCODE_MT_LO      0x60
-
-#define I2C_FREQ_HZ 400000
 
 static const char *TAG = "bh1750";
 
-#define CHECK(x) do { esp_err_t __; if ((__ = x) != ESP_OK) return __; } while (0)
-#define CHECK_ARG(VAL) do { if (!(VAL)) return ESP_ERR_INVALID_ARG; } while (0)
+#define I2C_ADDR BH1750_ADDRESS1
+#define BH1750_MODE BH1750_CONTINUOUS_HIGH_RES_MODE
 
-inline static esp_err_t send_command_nolock(i2c_dev_t *dev, uint8_t cmd)
-{
-    return i2c_dev_write(dev, NULL, 0, &cmd, 1);
+#define PIN_SDA 21
+#define PIN_SCL 22
+#define I2C_MASTER_NUM I2C_NUM_1   /*!< I2C port number for master dev */
+#define I2C_MASTER_TX_BUF_DISABLE   0   /*!< I2C master do not need buffer */
+#define I2C_MASTER_RX_BUF_DISABLE   0   /*!< I2C master do not need buffer */
+#define I2C_MASTER_FREQ_HZ   10000     /*!< I2C master clock frequency */
+#define ACK_CHECK_EN   0x1     /*!< I2C master will check ack from slave*/
+#define ACK_CHECK_DIS  0x0     /*!< I2C master will not check ack from slave */
+#define ACK_VAL    0x0         /*!< I2C ack value */
+#define NACK_VAL   0x1         /*!< I2C nack value */
+
+int bh1750_I2C_write(uint8_t dev_addr, uint8_t reg_addr, uint8_t *reg_data, uint8_t cnt);
+int bh1750_I2C_read(uint8_t dev_addr, uint8_t reg_addr, uint8_t *reg_data, uint8_t cnt);
+
+void bh1750_reset(void) {
+   	ESP_LOGE(TAG, "reset");
+	bh1750_I2C_write(I2C_ADDR, BH1750_POWER_ON, NULL, 0);
+	bh1750_I2C_write(I2C_ADDR, BH1750_RESET, NULL, 0);
+	vTaskDelay(10 / portTICK_RATE_MS); // sleep 10ms
 }
 
-static esp_err_t send_command(i2c_dev_t *dev, uint8_t cmd)
-{
-    I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, send_command_nolock(dev, cmd));
-    I2C_DEV_GIVE_MUTEX(dev);
+float bh1750_read(void) {
+	uint8_t buf[32];
+	uint8_t mode = BH1750_MODE;
+	uint8_t sleepms = 1;
+	uint8_t resdiv = 1;
+	float luxval=0;
+	int ret = -1;
 
-    return ESP_OK;
-}
+	switch (mode) {
+	case BH1750_CONTINUOUS_HIGH_RES_MODE:
+	case BH1750_ONE_TIME_HIGH_RES_MODE:
+		sleepms=180;
+		break;
+	case BH1750_CONTINUOUS_HIGH_RES_MODE_2:
+	case BH1750_ONE_TIME_HIGH_RES_MODE_2:
+		sleepms=180;
+		resdiv=2;
+		break;
+	case BH1750_CONTINUOUS_LOW_RES_MODE:
+		sleepms=24;
+		break;
+	case BH1750_ONE_TIME_LOW_RES_MODE:
+		sleepms=50;
+		break;
+	}
 
-esp_err_t bh1750_init_desc(i2c_dev_t *dev, uint8_t addr, i2c_port_t port, gpio_num_t sda_gpio, gpio_num_t scl_gpio)
-{
-    CHECK_ARG(dev);
-
-    if (addr != BH1750_ADDR_LO && addr != BH1750_ADDR_HI)
-    {
-        ESP_LOGE(TAG, "Invalid I2C address");
-        return ESP_ERR_INVALID_ARG;
+	ret=bh1750_I2C_write(I2C_ADDR, mode, NULL, 0);
+    if (ret != ESP_OK) {
+    	bh1750_reset();
+    	return -1;
     }
 
-    dev->port = port;
-    dev->addr = addr;
-    dev->cfg.sda_io_num = sda_gpio;
-    dev->cfg.scl_io_num = scl_gpio;
-#if HELPER_TARGET_IS_ESP32
-    dev->cfg.master.clk_speed = I2C_FREQ_HZ;
-#endif
-    return i2c_dev_create_mutex(dev);
+	vTaskDelay(sleepms / portTICK_RATE_MS); // sleep ms
+	ret=bh1750_I2C_read(I2C_ADDR, 0xFF, buf, 2);
+    if (ret != ESP_OK) {
+    	bh1750_reset();
+    	return 0;
+    }
+	uint16_t luxraw = (uint16_t)(((uint16_t)(buf[0]<<8))|((uint16_t)buf[1]));
+	luxval = (float)luxraw/1.2/resdiv;
+	ESP_LOGI(TAG, "sensraw=%u lux=%f", luxraw,luxval);
+
+	return luxval;
 }
 
-esp_err_t bh1750_free_desc(i2c_dev_t *dev)
-{
-    CHECK_ARG(dev);
+void bh1750_init(void) {
 
-    return i2c_dev_delete_mutex(dev);
+    i2c_config_t conf;
+    conf.mode = I2C_MODE_MASTER;
+	ESP_LOGI(TAG, "sda_io_num %d", PIN_SDA);
+    conf.sda_io_num = PIN_SDA;
+    conf.sda_pullup_en = GPIO_PULLUP_ENABLE;
+	ESP_LOGI(TAG, "scl_io_num %d", PIN_SCL);
+    conf.scl_io_num = PIN_SCL;
+    conf.scl_pullup_en = GPIO_PULLUP_ENABLE;
+	ESP_LOGI(TAG, "clk_speed %d", I2C_MASTER_FREQ_HZ);
+    conf.master.clk_speed = I2C_MASTER_FREQ_HZ;
+	ESP_LOGI(TAG, "i2c_param_config %d", conf.mode);
+    ESP_ERROR_CHECK(i2c_param_config(I2C_MASTER_NUM, &conf));
+	ESP_LOGI(TAG, "i2c_driver_install %d", I2C_MASTER_NUM);
+    ESP_ERROR_CHECK(i2c_driver_install(I2C_MASTER_NUM, conf.mode, I2C_MASTER_RX_BUF_DISABLE, I2C_MASTER_TX_BUF_DISABLE, 0));
+
 }
 
-esp_err_t bh1750_power_down(i2c_dev_t *dev)
-{
-    CHECK_ARG(dev);
+void bh1750_deinit(void) {
+	ESP_LOGI(TAG, "i2c_driver_delete");
+	ESP_ERROR_CHECK(i2c_driver_delete(I2C_MASTER_NUM));
 
-    return send_command(dev, OPCODE_POWER_DOWN);
 }
 
-esp_err_t bh1750_power_on(i2c_dev_t *dev)
-{
-    CHECK_ARG(dev);
+/*	\Brief: The function is used as I2C bus read
+*	\Return : Status of the I2C read
+*	\param dev_addr : The device address of the sensor
+*	\param reg_addr : Address of the first register, will data is going to be read
+*	\param reg_data : This data read from the sensor, which is hold in an array
+*	\param cnt : The no of data byte of to be read
+*/
+int bh1750_I2C_write(uint8_t dev_addr, uint8_t reg_addr, uint8_t *reg_data, uint8_t cnt) {
+	int ret = 0;
 
-    return send_command(dev, OPCODE_POWER_ON);
-}
-
-esp_err_t bh1750_setup(i2c_dev_t *dev, bh1750_mode_t mode, bh1750_resolution_t resolution)
-{
-    CHECK_ARG(dev);
-
-    uint8_t opcode = mode == BH1750_MODE_CONTINUOUS ? OPCODE_CONT : OPCODE_OT;
-    switch (resolution)
-    {
-        case BH1750_RES_LOW:  opcode |= OPCODE_LOW;   break;
-        case BH1750_RES_HIGH: opcode |= OPCODE_HIGH;  break;
-        default:              opcode |= OPCODE_HIGH2; break;
+	ESP_LOGD(TAG, "bh1750_I2C_write I2CAddress 0x%02X len %d reg 0x%02X", dev_addr,cnt,reg_addr);
+	if (cnt>0 && reg_data != NULL && LOG_LOCAL_LEVEL >= ESP_LOG_DEBUG) {
+		for (int pos = 0; pos < cnt; pos++) {
+			printf("0x%02X ",*(reg_data + pos));
+		}
+		printf("\n");
+	}
+	i2c_cmd_handle_t cmd = i2c_cmd_link_create();
+	i2c_master_start(cmd);
+	i2c_master_write_byte(cmd, dev_addr<<1| I2C_MASTER_WRITE, ACK_CHECK_EN);
+	i2c_master_write_byte(cmd, reg_addr, ACK_CHECK_EN);
+	if (cnt>0 && reg_data != NULL) {
+		i2c_master_write(cmd, reg_data, cnt, ACK_CHECK_EN);
+	}
+	i2c_master_stop(cmd);
+	ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+	i2c_cmd_link_delete(cmd);
+    if (ret != ESP_OK) {
+    	ESP_LOGE(TAG, "bh1750_I2C_write write data fail I2CAddress 0x%02X len %d reg 0x%02X", dev_addr,cnt,reg_addr);
     }
 
-    CHECK(send_command(dev, opcode));
-
-    ESP_LOGD(TAG, "bh1750_setup(PORT = %d, ADDR = 0x%02x, VAL = 0x%02x)", dev->port, dev->addr, opcode);
-
-    return ESP_OK;
+	return ret;
 }
 
-esp_err_t bh1750_set_measurement_time(i2c_dev_t *dev, uint8_t time)
-{
-    CHECK_ARG(dev);
+ /*	\Brief: The function is used as I2C bus read
+ *	\Return : Status of the I2C read
+ *	\param dev_addr : The device address of the sensor
+ *	\param reg_addr : Address of the first register, will data is going to be read
+ *	\param reg_data : This data read from the sensor, which is hold in an array
+ *	\param cnt : The no of data byte of to be read
+ */
+int bh1750_I2C_read(uint8_t dev_addr, uint8_t reg_addr, uint8_t *reg_data, uint8_t cnt) {
+	int ret = 0;
+	int pos;
+	i2c_cmd_handle_t cmd;
 
-    I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, send_command_nolock(dev, OPCODE_MT_HI | (time >> 5)));
-    I2C_DEV_CHECK(dev, send_command_nolock(dev, OPCODE_MT_LO | (time & 0x1f)));
-    I2C_DEV_GIVE_MUTEX(dev);
+	ESP_LOGD(TAG, "bh1750_I2C_read I2CAddress 0x%02X len %d reg 0x%02X", dev_addr,cnt,reg_addr);
 
-    return ESP_OK;
-}
+	if (reg_addr!=0xFF) {
+		cmd = i2c_cmd_link_create();
+		i2c_master_start(cmd);
+		i2c_master_write_byte(cmd, dev_addr<<1| I2C_MASTER_WRITE, ACK_CHECK_EN);
+		i2c_master_write_byte(cmd, reg_addr, ACK_CHECK_EN);
+		i2c_master_stop(cmd);
+		ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+		i2c_cmd_link_delete(cmd);
+		if (ret != ESP_OK) {
+			ESP_LOGE(TAG, "bh1750_I2C_read write reg fail %d",ret);
+			return ret;
+		}
+	}
 
-esp_err_t bh1750_read(i2c_dev_t *dev, uint16_t *level)
-{
-    CHECK_ARG(dev && level);
+	cmd = i2c_cmd_link_create();
+	i2c_master_start(cmd);
+	i2c_master_write_byte(cmd, dev_addr<<1| I2C_MASTER_READ, ACK_CHECK_EN);
+	for (pos = 0; pos < (cnt-1); pos++) {
+		i2c_master_read_byte(cmd, reg_data + pos, ACK_VAL);
+	}
+	i2c_master_read_byte(cmd, reg_data + cnt -1, NACK_VAL);
+	i2c_master_stop(cmd);
+	ret = i2c_master_cmd_begin(I2C_MASTER_NUM, cmd, 1000 / portTICK_RATE_MS);
+	i2c_cmd_link_delete(cmd);
+    if (ret != ESP_OK) {
+    	ESP_LOGE(TAG, "bh1750_I2C_read read data fail %d",ret);
+        return ret;
+    }
+    if (LOG_LOCAL_LEVEL >= ESP_LOG_DEBUG) {
+		for (pos = 0; pos < cnt; pos++) {
+			printf("0x%02X ",*(reg_data + pos));
+		}
+		printf("\n");
+    }
 
-    uint8_t buf[2];
 
-    I2C_DEV_TAKE_MUTEX(dev);
-    I2C_DEV_CHECK(dev, i2c_dev_read(dev, NULL, 0, buf, 2));
-    I2C_DEV_GIVE_MUTEX(dev);
-
-    *level = buf[0] << 8 | buf[1];
-    *level = (*level * 10) / 12; // convert to LUX
-
-    return ESP_OK;
+	return ret;
 }
