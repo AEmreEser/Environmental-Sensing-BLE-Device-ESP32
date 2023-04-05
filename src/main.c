@@ -14,7 +14,7 @@
 #define PIN_SCL 22 // GPIO_NUM_22
 #define PIN_SDA 21 // GPIO_NUM_21 // IMPORTANT --> ALSO DEFINED IN THE BH1750.H FILE --> MODIFY IT AS WELL
 
-#define ERROR_CHECK(error_param, error, TAG) error = (error_param != ESP_OK) ? (1) : (0); ESP_LOGI(TAG, "%d",error);
+#define ERROR_CHECK(error_param, error, TAG) error = ( (error_param) != ESP_OK) ? (1) : (0); ESP_LOGI(TAG, "error status: %d",error);
 
 static const char * TAGBMP = "BMP180"; // defined in bmp180.c
 static const char * TAGBH = "BH1750"; // defined in bh1750.c
@@ -32,23 +32,33 @@ void app_main() {
 
     // initialize bh
     // cannot error check this here, error checking done internally
-    bh1750_init();
+    // bh1750_init(); // no need for this - the port is already configured by the bmp 180 library above -- will throw an error if both configuration functions are called on the same port without removing configurations
     vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay
 
     while (1){
         ERROR_CHECK(bmp180_read_temperature(&temp_at_instance), error, TAGBMP);
-        ESP_LOGI(TAGBMP, "temperature at instance: %.9f", temp_at_instance);
+        ESP_LOGI(TAGBMP, "temperature at instance: %f", temp_at_instance);
 
         ERROR_CHECK(bmp180_read_pressure(&pressure_at_instance), error, TAGBMP);
         ESP_LOGI(TAGBMP, "pressure at instance: %ld", pressure_at_instance);
 
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay // do we need this between the two sensors??
+        vTaskDelay(2400 / portTICK_PERIOD_MS); // 240 ms delay // need twice of high res measurement update period as the measurements are taken twice
 
         ERROR_CHECK(light_strength = bh1750_read(), error, TAGBH);
-        ESP_LOGI(TAGBH, "light strength at instance: %.9f", light_strength);
+        ESP_LOGI(TAGBH, "light strength at instance: %f", light_strength);
 
         vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay
 
     }
     
 }
+
+/**
+ * TODO:
+ * @ --DONE-- light sensor stuff 
+ * @ read from sensor function 
+ * @ moving median function
+ * @ lifo queue for sensor values -- decide on queue item type carefully
+ * @ BLE functionality
+ * 
+*/
