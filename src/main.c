@@ -5,49 +5,292 @@
 #include "driver/i2c.h"
 #include <driver/gpio.h>
 
-#include "./components/bmp180.h"
-// BMP180 LIBRARY TAKEN FROM: https://github.com/ESP32Tutorials/BMP180-ESP32-ESP-IDF/tree/main/components
-#include "./components/bh1750.h"
-// BH1750 LIBRARY TAKEN FROM: https://github.com/pcbreflux/espressif/tree/master/esp32/app/ESP32_bh1750_oled/main
+#include "defs.h"
+#include "moving_med_filter.h"
+#include "basic_stack.h"
+#include "ble_control.h"
 
-#define INCLUDE_vTaskDelay 1 // to enable the vtaskdelay function : https://www.freertos.org/a00127.html
-#define PIN_SCL 22 // GPIO_NUM_22
-#define PIN_SDA 21 // GPIO_NUM_21 // IMPORTANT --> ALSO DEFINED IN THE BH1750.H FILE --> MODIFY IT AS WELL
+#include "./components/bmp180.h" // BMP180 LIBRARY TAKEN FROM: https://github.com/ESP32Tutorials/BMP180-ESP32-ESP-IDF/tree/main/components
+#include "./components/bh1750.h" // BH1750 LIBRARY TAKEN FROM: https://github.com/pcbreflux/espressif/tree/master/esp32/app/ESP32_bh1750_oled/main
 
-#define ERROR_CHECK(error_param, error, TAG) error = ( (error_param) != ESP_OK) ? (1) : (0); ESP_LOGI(TAG, "error status: %d",error);
+#define PRESSURE_FILTER_MAX_SIZE 5
+#define PRESSURE_FILTER_WINDOW_SIZE 2
+#define LIGHT_FILTER_MAX_SIZE 5
+#define LIGHT_FILTER_WINDOW_SIZE 2
 
-static const char * TAGBMP = "BMP180"; // defined in bmp180.c
-static const char * TAGBH = "BH1750"; // defined in bh1750.c
+/** @brief reads from sensors, multiplexed by addres -> also converts pressure reading from pa to mbar, involves vtaskdelays
+*/
+static float i2c_sensor_read(const uint8_t addr, uint8_t * error){
+
+    float ret = -1.0;
+    uint32_t pressure_temp;
+
+    switch (addr)
+    {
+    case BMP180_ADDR:
+        *error = bmp180_read_pressure(&pressure_temp); // in pa
+        ret = (float) (pressure_temp);
+        ESP_LOGI(TAGBMP, "pressure at instance: %f \n", ret);
+        vTaskDelay(2400 / portTICK_PERIOD_MS); // 240 ms delay -> for high res pressure reading
+        break;
+
+    case BH1750_ADDR:
+    case BH1750_ADDR_ALT:
+
+        ERROR_CHECK( (ret = bh1750_read() ) != -1 ? ESP_OK : 1, *error, TAGBH); 
+        *error = (ret == -1); // bh returns -1 for failed readings
+        ESP_LOGI(TAGBH, "light strength at instance: %f \n", ret);
+        vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay for light measurement
+        break;
+    
+    default:
+        ESP_LOGI(TAGFILTER, "error while reading sensor values, invalid address %x", addr);
+
+        break;
+    }
+
+    return ret;
+
+}
+
+/** @brief adds new value to the filter, gets new value of filtered sensor readings 
+ * @return new filtered sensor reading, -1.0 for unitialized filter
+ * @param raw_reading newly read raw value from sensor
+ * @param filter the filter containing values for the sensor
+*/
+static float filter_sensor_reading(float raw_reading, moving_med_filter * filter){
+
+    float ret = -1;
+    esp_err_t error = ESP_OK;
+
+    if (filter->value_array == NULL){
+        ESP_LOGI(TAGFILTER, "filter value NULL inside filter_sensor_reading, cannot filter sensor reading");
+    }
+    else {
+
+        error = add_to_filter(filter, raw_reading);
+        ERROR_CHECK(error, error, TAGFILTER);
+
+        error = get_filtered_value(filter, &ret);
+        ERROR_CHECK(error, error, TAGFILTER);
+    }
+
+    return ret;
+
+}
+
+/** @brief intializes bluetooth low energy gap procedure acc. to some predefined specs
+*/
+void init_ble_gap_routine(){
+
+    esp_err_t error;
+
+    error = nvs_flash_init();
+        ERROR_CHECK(error, error, TAGGEN);
+
+    // error = esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
+       // ERROR_CHECK(error, error, TAGGEN);
+
+    esp_bt_controller_config_t def_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
+    error = esp_bt_controller_init(&def_cfg);
+    ERROR_CHECK(error, error, TAGGEN);
+
+    error = esp_bt_controller_enable(ESP_BT_MODE_BLE);
+        ERROR_CHECK(error, error, TAGGEN);
+
+    error = esp_bluedroid_init();
+        ERROR_CHECK(error, error, TAGGEN);
+
+    error = esp_bluedroid_enable();
+        ERROR_CHECK(error, error, TAGGEN);
+
+    error = esp_ble_gap_register_callback(gap_event_handler);
+        ERROR_CHECK(error, error, TAGGEN);
+
+    error = esp_ble_gap_set_device_name("ESP32 UNIT"); // creatively named :)
+        ERROR_CHECK(error, error, TAGGEN);
+
+    error = esp_ble_gap_config_adv_data(&adv_data);
+        ERROR_CHECK(error, error, TAGGEN);    
+    
+
+}
+
+static stack_t pressure_stack; // stack size defined in defs.h
+static stack_t light_stack;
+
+static sensor_reading final_sensor_readings[2]; // = {23,34}; // contains the data that will be sent in the advertisement packet
+
+static bool new_pressure_value_flag = 0;
+static bool new_light_value_flag = 0; // controls when to send the adv data
+
+
+static void gap_event_handler(esp_gap_ble_cb_event_t event , esp_ble_gap_cb_param_t *param ){
+
+    esp_err_t error = 0;
+
+    switch (event){
+    case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
+    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT: // advertising data set complete
+     
+        ESP_LOGI(TAGGEN, "data config set complete, starting to advertise");
+        esp_ble_gap_start_advertising(&adv_params);
+
+        break;
+    case ESP_GAP_BLE_ADV_START_COMPLETE_EVT: // upon starting advertising
+
+        ESP_LOGI(TAGGEN, "began advertising, man_data contents %x, %x, %x, %x", man_data[0],man_data[1],man_data[2],man_data[3]);
+    
+        break;
+    case ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT: // could be useful when switching advertised data
+
+        ESP_LOGI(TAGGEN,"received adv stop event");
+
+        if (new_light_value_flag ){
+            new_light_value_flag = false;
+            error = stack_pop(&light_stack, &(final_sensor_readings[1].value));
+            ESP_LOGI(TAGGEN, "pop from stack %s, stack size %d", ((error == ESP_OK) ? ("successful") : ("failed")), light_stack.top );
+            ESP_LOGI(TAGGEN, "updating adv data - new light value: %f", final_sensor_readings[1].value);
+            update_adv_data(&(final_sensor_readings[1]));
+
+            adv_data.p_manufacturer_data = man_data;
+
+            error = esp_ble_gap_config_adv_data(&adv_data);
+                ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
+
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+        } 
+        
+        if (new_pressure_value_flag){
+            new_pressure_value_flag = false;
+            error = stack_pop(&pressure_stack, &(final_sensor_readings[0].value));
+            ESP_LOGI(TAGGEN, "pop from stack %s, %d", (error == ESP_OK) ? ("successful") : ("failed"), pressure_stack.top);
+            ESP_LOGI(TAGGEN, "updating adv data - new pressure value: %f", final_sensor_readings[0].value);
+            update_adv_data(&(final_sensor_readings[0]));
+
+            adv_data.p_manufacturer_data = man_data;
+
+            error = esp_ble_gap_config_adv_data(&adv_data);
+                ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
+
+            vTaskDelay(1000 / portTICK_PERIOD_MS);
+        }
+
+            // esp_ble_gap_start_advertising(&adv_params);
+
+        break;
+
+    default: 
+        ESP_LOGI(TAGGEN, "unrecognized gap event");
+        break; 
+    }
+}
+
+
 
 void app_main() {
 
-    float temp_at_instance = 0; // in Centigrade
-    uint32_t pressure_at_instance = 0; // in I think Pa
-    float light_strength = 0; // in lux
+    // float temp_at_instance = 0; // in Centigrade
+    float pressure_at_instance = 0; // in I think Pa
+    float light_strength_at_instance = 0; // in lux
     uint8_t error = 0;
 
+    stack_init_reset(&pressure_stack);
+    stack_init_reset(&light_stack);
+
+    moving_med_filter pressure_filter;
+    moving_med_filter light_filter;
+
+    mov_med_filter_init(&pressure_filter, PRESSURE_FILTER_MAX_SIZE, PRESSURE_FILTER_WINDOW_SIZE);
+    mov_med_filter_init(&light_filter, LIGHT_FILTER_MAX_SIZE, LIGHT_FILTER_WINDOW_SIZE);
+
     // initialize bmp
-    ERROR_CHECK(bmp180_init(21, 22), error, TAGBMP);
+    ERROR_CHECK(bmp180_init(PIN_SDA, PIN_SCL), error, TAGBMP);
     vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay
 
-    // initialize bh
-    // cannot error check this here, error checking done internally
-    // bh1750_init(); // no need for this - the port is already configured by the bmp 180 library above -- will throw an error if both configuration functions are called on the same port without removing configurations
-    vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay
+    // no need to initalize bh1750 --> initalization procedure concerns i2c port only and is not sensor specific
+    // hence only initializign bmp would work for us
 
-    while (1){
-        ERROR_CHECK(bmp180_read_temperature(&temp_at_instance), error, TAGBMP);
-        ESP_LOGI(TAGBMP, "temperature at instance: %f", temp_at_instance);
+    init_ble_gap_routine(); // initialize ble thread
 
-        ERROR_CHECK(bmp180_read_pressure(&pressure_at_instance), error, TAGBMP);
-        ESP_LOGI(TAGBMP, "pressure at instance: %ld", pressure_at_instance);
+    vTaskDelay(1000 / portTICK_PERIOD_MS);
 
-        vTaskDelay(2400 / portTICK_PERIOD_MS); // 240 ms delay // need twice of high res measurement update period as the measurements are taken twice
+    ESP_LOGI(TAGGEN, "general check: moving median function, pressure filter is full %d, light filter is full %d", filter_is_full(&pressure_filter), filter_is_full(&light_filter));
 
-        ERROR_CHECK(light_strength = bh1750_read(), error, TAGBH); // ISSUE: FOR SOME REASON WE ALWAYS GET AN ERROR = 1 WITH THE LUX MEASUREMENT
-        ESP_LOGI(TAGBH, "light strength at instance: %f", light_strength);
+    while (1){ // bt runs on a separate thread
 
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay
+        ESP_LOGI(TAGGEN, "WHILE ITERATION");
+
+        uint8_t error;
+
+        pressure_at_instance = i2c_sensor_read(BMP180_ADDR, &error);
+        
+        if (error == ESP_OK){
+            ESP_LOGI(TAGGEN, "read pressure data without errors");
+            pressure_at_instance /= 100; // mbar conversion (from pa)
+            pressure_at_instance = filter_sensor_reading(pressure_at_instance, &pressure_filter);
+
+            if (filter_is_full(&pressure_filter)){ // filter being full means: there are enough values to form an accurate sensor reading --> once full the filter will remain full unless reset
+                ESP_LOGI(TAGGEN, "pressure filter is full");
+                new_pressure_value_flag = true;
+                error = stack_push(&pressure_stack, pressure_at_instance);
+                if (error != ESP_OK)
+                    ESP_LOGI(TAGGEN,"error while pushing onto stack - pressure, stack top: %d", pressure_stack.top);
+                else 
+                    ESP_LOGI(TAGGEN,"successful stack push - pressure, stack top: %d", pressure_stack.top);
+            }
+        }
+
+        light_strength_at_instance = i2c_sensor_read(BH1750_ADDR, &error);
+
+        if (error == ESP_OK){
+            ESP_LOGI(TAGGEN, "read light data without errors");
+            light_strength_at_instance = filter_sensor_reading(light_strength_at_instance, &light_filter);
+
+            if (filter_is_full(&light_filter)){
+                ESP_LOGI(TAGGEN, "light filter is full");
+                new_light_value_flag = true;
+                error = stack_push(&light_stack, light_strength_at_instance);
+                if (error != ESP_OK)
+                    ESP_LOGI(TAGGEN,"error while pushing onto stack - light, stack top: %d", light_stack.top);
+                else 
+                    ESP_LOGI(TAGGEN,"successful stack push - light, stack top: %d", light_stack.top);
+            }
+        }
+
+
+        if (new_light_value_flag){
+            new_light_value_flag = false;
+            error = stack_pop(&light_stack, &(final_sensor_readings[1].value));
+            ESP_LOGI(TAGGEN, "pop from stack %s, stack size %d", ((error == ESP_OK) ? ("successful") : ("failed")), light_stack.top );
+            ESP_LOGI(TAGGEN, "updating adv data - new light value: %f", final_sensor_readings[1].value);
+            update_adv_data(&(final_sensor_readings[1]));
+            ESP_LOGI(TAGGEN,"new man_data contents %x, %x, %x, %x", man_data[0],man_data[1],man_data[2],man_data[3]);
+            // adv_data.p_manufacturer_data = man_data;
+
+            error = esp_ble_gap_config_adv_data(&adv_data); // triggers the conf set event
+                ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
+
+        }
+        
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+
+        if (new_pressure_value_flag){
+            new_pressure_value_flag = false;
+            error = stack_pop(&pressure_stack, &(final_sensor_readings[0].value));
+            ESP_LOGI(TAGGEN, "pop from stack %s, %d", (error == ESP_OK) ? ("successful") : ("failed"), pressure_stack.top);
+            ESP_LOGI(TAGGEN, "updating adv data - new pressure value: %f", final_sensor_readings[0].value);
+            update_adv_data(&(final_sensor_readings[0]));
+            ESP_LOGI(TAGGEN,"new man_data contents %x, %x, %x, %x", man_data[0],man_data[1],man_data[2],man_data[3]);
+            
+            // adv_data.p_manufacturer_data = man_data;
+
+            error = esp_ble_gap_config_adv_data(&adv_data); // triggers the conf set event
+                ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
+
+        }
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
 
     }
     
@@ -55,15 +298,15 @@ void app_main() {
 
 /**
  * TODO: fixes
- * @lux measurement always returns 1 -> independent of actual measurement failure
+ * -- DONE -- @lux measurement always returns 1 -> independent of actual measurement failure
  * 
  * TODO: features
  * @ --DONE-- light sensor stuff 
- * @ read from sensor function 
- * @ moving median function
- * @ lifo queue for sensor values -- decide on queue item type carefully
- * @ BLE functionality
+ * @ --DONE-- read from sensor function 
+ * @ --DONE-- moving median function 
+ * @ --DONE-- lifo queue for sensor values -- decide on queue item type carefully
+ * @ --TESTING-- BLE functionality
  * 
  * Extra Features:
- * @ -- unit conversion
+ * @ --DONE-- pa/mbar unit conversion
 */

@@ -4,6 +4,24 @@
         "gpio.h": "c",
         "esp_log.h": "c",
         "freertos.h": "c",
-        "task.h": "c"
+        "task.h": "c",
+        "ble_svc_gatt.h": "c",
+        "ble_svc_gap.h": "c",
+        "stdlib.h": "c",
+        "basic_stack.h": "c",
+        "nvs_flash.h": "c",
+        "esp_gap_ble_api.h": "c",
+        "esp_bt_defs.h": "c",
+        "i2c.h": "c",
+        "esp_system.h": "c",
+        "bh1750.h": "c",
+        "sdkconfig.h": "c",
+        "array": "c",
+        "bitset": "c",
+        "string_view": "c",
+        "initializer_list": "c",
+        "regex": "c",
+        "utility": "c",
+        "bmp180.h": "c"
     }
 }

@@ -3,3 +3,11 @@
 .vscode/c_cpp_properties.json
 .vscode/launch.json
 .vscode/ipch
+src/nimble_test.c
+src/ble_test_file.c
+sdkconfig.esp32doit-devkit-v1.old
+src/nimble_test.c
+src/nimble_BLE_main.c
+src/old_while.txt
+src/esp_ble_test.txt
+.gitignore
