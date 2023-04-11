@@ -15,9 +15,11 @@
 ### Working Features
 - sensor input reading functional with occasional minor errors
     - Pressure (Pa)
-    - Temperature (C)
+    - Temperature (C) (not broadcasted in latest version)
     - Ambient light (lux)
-### Coming Features
 - Moving median function for eliminating sensor noise
 - BLE output of sensor reading values
 - LIFO queue for BLE output
+### Coming Features
+- RTOS multithreaded sensor read and broadcast functionality
+    - note: will take some time : )
