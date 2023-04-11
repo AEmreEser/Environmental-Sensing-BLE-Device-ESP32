@@ -10,7 +10,7 @@ typedef struct {
     uint16_t top;
 } stack_t;
 
-
+// discards items 
 void stack_discard(stack_t *stack) {
 
     ESP_LOGI(TAGGEN, "discarding stack");

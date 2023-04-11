@@ -13,12 +13,8 @@
 #include "./components/bmp180.h" // BMP180 LIBRARY TAKEN FROM: https://github.com/ESP32Tutorials/BMP180-ESP32-ESP-IDF/tree/main/components
 #include "./components/bh1750.h" // BH1750 LIBRARY TAKEN FROM: https://github.com/pcbreflux/espressif/tree/master/esp32/app/ESP32_bh1750_oled/main
 
-#define PRESSURE_FILTER_MAX_SIZE 5
-#define PRESSURE_FILTER_WINDOW_SIZE 2
-#define LIGHT_FILTER_MAX_SIZE 5
-#define LIGHT_FILTER_WINDOW_SIZE 2
-
 /** @brief reads from sensors, multiplexed by addres -> also converts pressure reading from pa to mbar, involves vtaskdelays
+* @remark sensor reading frequency adjusted here: 1Hz < < 2.4 Hz
 */
 static float i2c_sensor_read(const uint8_t addr, uint8_t * error){
 
@@ -79,117 +75,10 @@ static float filter_sensor_reading(float raw_reading, moving_med_filter * filter
 
 }
 
-/** @brief intializes bluetooth low energy gap procedure acc. to some predefined specs
-*/
-void init_ble_gap_routine(){
-
-    esp_err_t error;
-
-    error = nvs_flash_init();
-        ERROR_CHECK(error, error, TAGGEN);
-
-    // error = esp_bt_controller_mem_release(ESP_BT_MODE_CLASSIC_BT);
-       // ERROR_CHECK(error, error, TAGGEN);
-
-    esp_bt_controller_config_t def_cfg = BT_CONTROLLER_INIT_CONFIG_DEFAULT();
-    error = esp_bt_controller_init(&def_cfg);
-    ERROR_CHECK(error, error, TAGGEN);
-
-    error = esp_bt_controller_enable(ESP_BT_MODE_BLE);
-        ERROR_CHECK(error, error, TAGGEN);
-
-    error = esp_bluedroid_init();
-        ERROR_CHECK(error, error, TAGGEN);
-
-    error = esp_bluedroid_enable();
-        ERROR_CHECK(error, error, TAGGEN);
-
-    error = esp_ble_gap_register_callback(gap_event_handler);
-        ERROR_CHECK(error, error, TAGGEN);
-
-    error = esp_ble_gap_set_device_name("ESP32 UNIT"); // creatively named :)
-        ERROR_CHECK(error, error, TAGGEN);
-
-    error = esp_ble_gap_config_adv_data(&adv_data);
-        ERROR_CHECK(error, error, TAGGEN);    
-    
-
-}
-
-static stack_t pressure_stack; // stack size defined in defs.h
-static stack_t light_stack;
-
-static sensor_reading final_sensor_readings[2]; // = {23,34}; // contains the data that will be sent in the advertisement packet
-
-static bool new_pressure_value_flag = 0;
-static bool new_light_value_flag = 0; // controls when to send the adv data
+// LIFO QUEUES INSIDE ble_control.h
 
 
-static void gap_event_handler(esp_gap_ble_cb_event_t event , esp_ble_gap_cb_param_t *param ){
-
-    esp_err_t error = 0;
-
-    switch (event){
-    case ESP_GAP_BLE_ADV_DATA_RAW_SET_COMPLETE_EVT:
-    case ESP_GAP_BLE_ADV_DATA_SET_COMPLETE_EVT: // advertising data set complete
-     
-        ESP_LOGI(TAGGEN, "data config set complete, starting to advertise");
-        esp_ble_gap_start_advertising(&adv_params);
-
-        break;
-    case ESP_GAP_BLE_ADV_START_COMPLETE_EVT: // upon starting advertising
-
-        ESP_LOGI(TAGGEN, "began advertising, man_data contents %x, %x, %x, %x", man_data[0],man_data[1],man_data[2],man_data[3]);
-    
-        break;
-    case ESP_GAP_BLE_ADV_STOP_COMPLETE_EVT: // could be useful when switching advertised data
-
-        ESP_LOGI(TAGGEN,"received adv stop event");
-
-        if (new_light_value_flag ){
-            new_light_value_flag = false;
-            error = stack_pop(&light_stack, &(final_sensor_readings[1].value));
-            ESP_LOGI(TAGGEN, "pop from stack %s, stack size %d", ((error == ESP_OK) ? ("successful") : ("failed")), light_stack.top );
-            ESP_LOGI(TAGGEN, "updating adv data - new light value: %f", final_sensor_readings[1].value);
-            update_adv_data(&(final_sensor_readings[1]));
-
-            adv_data.p_manufacturer_data = man_data;
-
-            error = esp_ble_gap_config_adv_data(&adv_data);
-                ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
-
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-
-        } 
-        
-        if (new_pressure_value_flag){
-            new_pressure_value_flag = false;
-            error = stack_pop(&pressure_stack, &(final_sensor_readings[0].value));
-            ESP_LOGI(TAGGEN, "pop from stack %s, %d", (error == ESP_OK) ? ("successful") : ("failed"), pressure_stack.top);
-            ESP_LOGI(TAGGEN, "updating adv data - new pressure value: %f", final_sensor_readings[0].value);
-            update_adv_data(&(final_sensor_readings[0]));
-
-            adv_data.p_manufacturer_data = man_data;
-
-            error = esp_ble_gap_config_adv_data(&adv_data);
-                ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
-
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-        }
-
-            // esp_ble_gap_start_advertising(&adv_params);
-
-        break;
-
-    default: 
-        ESP_LOGI(TAGGEN, "unrecognized gap event");
-        break; 
-    }
-}
-
-
-
-void app_main() {
+void app_main() { // sensor reading loop, bluedroid stack by default runs on a different thread
 
     // float temp_at_instance = 0; // in Centigrade
     float pressure_at_instance = 0; // in I think Pa
@@ -273,7 +162,6 @@ void app_main() {
                 ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
 
         }
-        
         vTaskDelay(1000 / portTICK_PERIOD_MS);
 
         if (new_pressure_value_flag){

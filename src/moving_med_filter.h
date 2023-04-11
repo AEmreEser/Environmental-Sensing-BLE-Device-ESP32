@@ -6,13 +6,13 @@
 #include "./components/bmp180.h" // BMP180 LIBRARY TAKEN FROM: https://github.com/ESP32Tutorials/BMP180-ESP32-ESP-IDF/tree/main/components
 #include "./components/bh1750.h" // BH1750 LIBRARY TAKEN FROM: https://github.com/pcbreflux/espressif/tree/master/esp32/app/ESP32_bh1750_oled/main
 
+/** @brief struct that encapsulates median filter data */
 typedef struct {
     uint8_t max_size;
     uint8_t actual_size; 
     float * value_array;
     uint8_t window_size;
     bool window_size_odd_even; // actual size
-
 } moving_med_filter;
 
 /** @brief initialize/ reset a moving_med_filter object
@@ -29,12 +29,11 @@ static void mov_med_filter_init(moving_med_filter * filter, uint8_t array_size, 
     filter->window_size_odd_even = !( (window_size & 0x01) == 1); // even -> size 0
 }
 
+/** @brief resets the median filter 
+*/
 static void mov_med_filter_reset(moving_med_filter * filter){
-
     ESP_LOGI(TAGGEN, "mvoing median filter reset");
-
     filter->actual_size = 0;
-
 }
 
 /** @brief check if the filter array is full

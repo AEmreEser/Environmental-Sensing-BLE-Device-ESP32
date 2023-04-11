@@ -22,6 +22,7 @@
         "initializer_list": "c",
         "regex": "c",
         "utility": "c",
-        "bmp180.h": "c"
+        "bmp180.h": "c",
+        "defs.h": "c"
     }
 }
