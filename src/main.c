@@ -27,7 +27,7 @@ static float i2c_sensor_read(const uint8_t addr, uint8_t * error){
         *error = bmp180_read_pressure(&pressure_temp); // in pa
         ret = (float) (pressure_temp);
         ESP_LOGI(TAGBMP, "pressure at instance: %f \n", ret);
-        vTaskDelay(2400 / portTICK_PERIOD_MS); // 240 ms delay -> for high res pressure reading
+        vTaskDelay(1000 / portTICK_PERIOD_MS); 
         break;
 
     case BH1750_ADDR:
@@ -36,7 +36,7 @@ static float i2c_sensor_read(const uint8_t addr, uint8_t * error){
         ERROR_CHECK( (ret = bh1750_read() ) != -1 ? ESP_OK : 1, *error, TAGBH); 
         *error = (ret == -1); // bh returns -1 for failed readings
         ESP_LOGI(TAGBH, "light strength at instance: %f \n", ret);
-        vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay for light measurement
+        vTaskDelay(720 /* 180 ms delay for sensor output (high res mode) inside bh1750_read() */ / portTICK_PERIOD_MS); // 100 ms delay for light measurement
         break;
     
     default:
@@ -96,14 +96,14 @@ void app_main() { // sensor reading loop, bluedroid stack by default runs on a d
 
     // initialize bmp
     ERROR_CHECK(bmp180_init(PIN_SDA, PIN_SCL), error, TAGBMP);
-    vTaskDelay(1000 / portTICK_PERIOD_MS); // 100 ms delay
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // 1000 ms delay
 
     // no need to initalize bh1750 --> initalization procedure concerns i2c port only and is not sensor specific
     // hence only initializign bmp would work for us
 
     init_ble_gap_routine(); // initialize ble thread
 
-    vTaskDelay(1000 / portTICK_PERIOD_MS);
+    vTaskDelay(1000 / portTICK_PERIOD_MS); // precaution making sure that the bluetooth adjustments are in line with the main thread
 
     ESP_LOGI(TAGGEN, "general check: moving median function, pressure filter is full %d, light filter is full %d", filter_is_full(&pressure_filter), filter_is_full(&light_filter));
 
@@ -162,7 +162,7 @@ void app_main() { // sensor reading loop, bluedroid stack by default runs on a d
                 ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
 
         }
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        // vTaskDelay(1000 / portTICK_PERIOD_MS);
 
         if (new_pressure_value_flag){
             new_pressure_value_flag = false;
@@ -178,7 +178,7 @@ void app_main() { // sensor reading loop, bluedroid stack by default runs on a d
                 ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
 
         }
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        // vTaskDelay(1000 / portTICK_PERIOD_MS);
 
     }
     

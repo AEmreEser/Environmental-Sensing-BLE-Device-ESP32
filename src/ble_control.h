@@ -110,8 +110,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event , esp_ble_gap_cb_para
             error = esp_ble_gap_config_adv_data(&adv_data);
                 ESP_LOGI(TAGGEN,"Reconfiguring adv data %d", error);
 
-            vTaskDelay(1000 / portTICK_PERIOD_MS);
-
+            vTaskDelay(1000 / portTICK_PERIOD_MS); // makes sure that the newly received data is not overwritten by any new pressure reading (in the if block below)
         } 
         
         if (new_pressure_value_flag){
@@ -129,7 +128,7 @@ static void gap_event_handler(esp_gap_ble_cb_event_t event , esp_ble_gap_cb_para
             vTaskDelay(1000 / portTICK_PERIOD_MS);
         }
 
-            // esp_ble_gap_start_advertising(&adv_params);
+            esp_ble_gap_start_advertising(&adv_params);
 
         break;
 

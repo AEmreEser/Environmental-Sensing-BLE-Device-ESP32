@@ -73,17 +73,18 @@ static esp_ble_adv_data_t adv_data =  {
     .set_scan_rsp = false,
     .include_name = true,
     .include_txpower = false,
-    .min_interval = 0x0004,
-    .max_interval = 0x00F0,
+    /* interval calculated as: value of interval parameter * 1.25 ms */
+    .min_interval = 0x5DBF, // 28.75 secs - advertisement interval
+    .max_interval = 0x5DC1, // 31.25 secs - advertisement interval
     // .appearance = 0x0300, // generic thermometer
-    .manufacturer_len = MAN_LEN, // won't change from packet to packet
+    .manufacturer_len = MAN_LEN,
     .appearance = 384, // generic remote control
     .p_manufacturer_data = man_data,
-    .service_data_len = 0, //MAN_LEN, // codes for advertised services
-    .p_service_data = NULL,// &man_data,
+    .service_data_len = 0,
+    .p_service_data = NULL,
     .service_uuid_len = sizeof(adv_svc_uuid),
     .p_service_uuid = adv_svc_uuid,
-    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT ), // last flag tells connections that we are usign ble 
+    .flag = (ESP_BLE_ADV_FLAG_GEN_DISC | ESP_BLE_ADV_FLAG_BREDR_NOT_SPT ), // last flag tells connections that we are using ble 
 };
 
 // gap advertising configuration
