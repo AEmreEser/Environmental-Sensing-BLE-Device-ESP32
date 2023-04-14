@@ -32,19 +32,16 @@ static float i2c_sensor_read(const uint8_t addr, uint8_t * error){
 
     case BH1750_ADDR:
     case BH1750_ADDR_ALT:
-
         ERROR_CHECK( (ret = bh1750_read() ) != -1 ? ESP_OK : 1, *error, TAGBH); 
         *error = (ret == -1); // bh returns -1 for failed readings
         ESP_LOGI(TAGBH, "light strength at instance: %f \n", ret);
         vTaskDelay(720 /* 180 ms delay for sensor output (high res mode) inside bh1750_read() */ / portTICK_PERIOD_MS); // 100 ms delay for light measurement
         break;
-    
+
     default:
         ESP_LOGI(TAGFILTER, "error while reading sensor values, invalid address %x", addr);
-
         break;
     }
-
     return ret;
 
 }

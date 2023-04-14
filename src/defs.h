@@ -89,8 +89,8 @@ static esp_ble_adv_data_t adv_data =  {
 
 // gap advertising configuration
 static esp_ble_adv_params_t adv_params /* configuring the advertising process */ = { // basically the loosest adv configs anywhere : )
-    .adv_int_min        = 0x20,
-    .adv_int_max        = 0x40,
+    .adv_int_min        = 0x5DBF,
+    .adv_int_max        = 0x5DC1,
     .adv_type           = ADV_TYPE_IND,
     .own_addr_type      = BLE_ADDR_TYPE_PUBLIC,
     .channel_map        = ADV_CHNL_ALL,

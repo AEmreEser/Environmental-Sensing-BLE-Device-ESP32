@@ -111,7 +111,7 @@ static esp_err_t get_filtered_value(moving_med_filter * filter, float * median_v
     qsort(sorted_data, filter_array_size, sizeof(float), float_cmp);
 
     // Compute the median
-    if ( (filter_array_size & 0x01) == 0) { // even: optimized by Emre Eser
+    if ( (filter_array_size & 0x01) == 0) { // even: optimized by Emre Eser // did not work : /
         *median_val = (float) ( (sorted_data[filter_array_size / 2 - 1] + sorted_data[filter_array_size / 2]) / 2.0) ;
     } else {
         *median_val = (float) ( sorted_data[filter_array_size / 2] );

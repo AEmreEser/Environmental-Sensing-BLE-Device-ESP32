@@ -10,4 +10,5 @@ src/nimble_test.c
 src/nimble_BLE_main.c
 src/old_while.txt
 src/esp_ble_test.txt
+build/
 .gitignore
